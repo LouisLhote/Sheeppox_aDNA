@@ -1,0 +1,477 @@
+import os
+import csv
+import yaml
+from collections import defaultdict
+ruleorder: adapter_removal_pe > adapter_removal_se
+# -------------------- Load config and sample info --------------------
+with open("config/config.yaml") as f:
+    config = yaml.safe_load(f)
+
+HOST_INDEX = config["host_index"]
+VIRUS_REFERENCES = {
+    "Sheeppoxvirus": "/raid_md0/louis/Sheeppox_paper/Modif_reference/Sheeppoxvirus_modif.fa",
+    "Goatpox_virus":"/raid_md0/louis/Sheeppox_paper/Modif_reference/Goatpoxvirus_modif.fa",
+    "Lumpy_skin_disease_virus": "/raid_md0/louis/Sheeppox_paper/ON_LSDV/REF/Lumpy_skin_disease_virus_trimmed.fa"
+}
+
+VIRUSES = ["Sheeppoxvirus", "Goatpoxvirus", "Lumpyskin_disease_virus"]
+
+PCRS_DICT = {}
+SAMPLES_DICT = defaultdict(list)
+READ_GROUPS = {}
+
+PE_PCRS = []
+SE_PCRS = []
+
+with open("config/samples.tsv") as f:
+    reader = csv.DictReader(f, delimiter="\t")
+    for row in reader:
+        sample = row["sample"]
+        pcr = row["pcr_id"]
+        SAMPLES_DICT[sample].append(pcr)
+        PCRS_DICT[pcr] = {
+            "sample": sample,
+            "r1": row["r1"],
+            "r2": row["r2"] if row["r2"].strip() else None,
+            "rglb": row["RGLB"],
+            "run": row["sequencing_run"]
+        }
+        rg_id = f"{row['RGLB']}_{row['sequencing_run']}"
+        READ_GROUPS[pcr] = f"@RG\\tID:{rg_id}\\tPL:ILLUMINA\\tLB:{row['RGLB']}\\tSM:{sample}"
+
+        if PCRS_DICT[pcr]["r2"] is None:
+            SE_PCRS.append(pcr)
+        else:
+            PE_PCRS.append(pcr)
+
+SAMPLES = list(SAMPLES_DICT.keys())
+PCRS = list(PCRS_DICT.keys())
+
+# Parse sample sheet and keep Screening-only IDs
+import pandas as pd
+samples_df = pd.read_csv("config/samples.tsv", sep="\t")
+SCREENING_IDS = samples_df.loc[samples_df["Style"] == "Screening", "pcr_id"].tolist()
+SCREENING_SAMPLES = samples_df.loc[samples_df["Style"] == "Screening", "sample"].unique().tolist()
+
+
+
+# -------------------- Workflow --------------------
+rule all:
+    input:
+        # Host filter
+        expand("results/{pcr}/host_cleaned/{pcr}_f4.bam", pcr=PCRS),
+        expand("results/{pcr}/host_cleaned/{pcr}_unaligned.fastq.gz", pcr=PCRS),
+        expand("results/{sample}/krakenuniq/kraken-report.txt", sample=SCREENING_SAMPLES),
+        expand("results/{sample}/Escore/genus/{sample}_genus.csv", sample=SCREENING_SAMPLES),
+        expand("results/{sample}/Escore/species/{sample}_species.csv", sample=SCREENING_SAMPLES),
+        expand("results/{sample}/Escore/pathogen/{sample}_pathogen.csv", sample=SCREENING_SAMPLES),
+        expand("results/merged_screening/{sample}_screening.fastq.gz", sample=SCREENING_SAMPLES),
+        # Standard pipeline
+	expand("results/{pcr}/sai/{pcr}_{virus}_aln.sai", pcr=PCRS, virus=VIRUS_REFERENCES.keys()),
+	expand("results/{pcr}/bam/{pcr}_{virus}_F4.bam", pcr=PCRS, virus=VIRUS_REFERENCES.keys()),
+	expand("results/{pcr}/bam/{pcr}_{virus}_F4_sorted.bam", pcr=PCRS, virus=VIRUS_REFERENCES.keys()),
+	expand("results/{pcr}/q30/{pcr}_{virus}_F4_q30.bam", pcr=PCRS, virus=VIRUS_REFERENCES.keys()),
+	expand("results/{pcr}/q30/{pcr}_{virus}_F4_q30_sort.bam", pcr=PCRS, virus=VIRUS_REFERENCES.keys()),
+	expand("results/{pcr}/final/{pcr}_{virus}_F4_q30_rmdup.bam", pcr=PCRS, virus=VIRUS_REFERENCES.keys()),
+	expand("results/{pcr}/final/{pcr}_{virus}_F4_q30_rmdup.metrics", pcr=PCRS, virus=VIRUS_REFERENCES.keys()),
+
+        # Per-sample merge
+        expand("results/merged/{sample}/{sample}_{virus}_merged.bam",
+        sample=SAMPLES, virus=VIRUS_REFERENCES.keys()),
+        expand("results/{pcr}/raw_counts/{pcr}_raw_read_count.txt", pcr=PCRS),
+        expand("results/{sample}/reporting/{sample}_all_virus_metrics.csv", sample=SAMPLES),
+        "sample_metrics.csv"
+
+rule adapter_removal_pe:
+    input:
+        r1 = lambda wc: PCRS_DICT[wc.pcr]["r1"],
+        r2 = lambda wc: PCRS_DICT[wc.pcr]["r2"]
+    output:
+        collapsed = "results/{pcr}/adapter_removal/{pcr}.collapsed.gz"
+    conda:
+        "workflow/envs/adapterremoval.yaml"
+    threads: 4
+    wildcard_constraints:
+        pcr="|".join(PE_PCRS)
+    shell:
+        """
+        AdapterRemoval --file1 {input.r1} --file2 {input.r2} \
+        --basename results/{wildcards.pcr}/adapter_removal/{wildcards.pcr} \
+        --threads {threads} --collapse --minadapteroverlap 1 \
+        --adapter1 AGATCGGAAGAGCACACGTCTGAACTCCAGTCAC \
+        --adapter2 AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGT \
+        --minlength 30 --gzip --trimns --trimqualities
+        """
+
+rule adapter_removal_se:
+    input:
+        r1 = lambda wc: PCRS_DICT[wc.pcr]["r1"]
+    output:
+        collapsed = "results/{pcr}/adapter_removal/{pcr}.collapsed.gz"
+    conda:
+        "workflow/envs/adapterremoval.yaml"
+    threads: 4
+    wildcard_constraints:
+        pcr="|".join(SE_PCRS)
+    shell:
+        """
+        cutadapt -a AGATCGGAAGAGCACACGTCTGAACTCCAGTCAC \
+                 -O 1 -m 30 \
+                 {input.r1} -o {output.collapsed} -j {threads}
+        """
+
+rule host_filter_bowtie2:
+    input:
+        collapsed = "results/{pcr}/adapter_removal/{pcr}.collapsed.gz"
+    output:
+        f4_bam = "results/{pcr}/host_cleaned/{pcr}_f4.bam"
+    conda:
+        "workflow/envs/bowtie2.yaml"
+    threads: 4
+    params:
+        host_index = HOST_INDEX
+    shell:
+        """
+        mkdir -p results/{wildcards.pcr}/host_cleaned
+        bowtie2 --very-sensitive-local -x {params.host_index} -U {input.collapsed} -p {threads} \
+        | samtools view -Sb - -f4 > {output.f4_bam}
+        """
+
+rule bam_to_fastq:
+    input:
+        bam = "results/{pcr}/host_cleaned/{pcr}_f4.bam"
+    output:
+        fastq = "results/{pcr}/host_cleaned/{pcr}_unaligned.fastq.gz"
+    conda:
+        "workflow/envs/samtools.yaml"
+    threads: 2
+    shell:
+        """
+        samtools bam2fq {input.bam} -@ {threads} | pigz -p {threads} > {output.fastq}
+        """
+
+
+# This rule will *only* run for samples that actually have screening data.
+rule merge_screening_fastqs:
+    input:
+        lambda wc: [
+            f"results/{pcr}/host_cleaned/{pcr}_unaligned.fastq.gz"
+            for pcr in SAMPLES_DICT[wc.sample]
+            if pcr in SCREENING_IDS
+        ]
+    output:
+        "results/merged_screening/{sample}_screening.fastq.gz"
+    run:
+        # Safety check: stop if somehow no inputs were found
+        if not input:
+            raise ValueError(f"No screening data found for sample {wildcards.sample}")
+        shell("""
+            mkdir -p results/merged_screening
+            cat {input} > {output}
+        """)
+
+
+
+
+rule krakenuniq_batch:
+    input:
+        expand("results/merged_screening/{sample}_screening.fastq.gz", sample=SCREENING_SAMPLES)
+    output:
+        expand("results/{sample}/krakenuniq/kraken-report.txt", sample=SCREENING_SAMPLES),
+        expand("results/{sample}/krakenuniq/output.txt", sample=SCREENING_SAMPLES)
+    params:
+        screening_samples=" ".join(SCREENING_SAMPLES)
+    threads: 32
+    conda:
+        "workflow/envs/krakenuniq.yaml"
+    shell:
+        """
+        # Preload DB once
+        krakenuniq --db {config[krakenuniq_db]} --preload --threads {threads}
+
+        # Run classification for each screening sample
+        for sample in {params.screening_samples}; do
+            mkdir -p results/$sample/krakenuniq
+            krakenuniq --db {config[krakenuniq_db]} \
+                --threads {threads} \
+                --fastq-input results/merged_screening/${{sample}}_screening.fastq.gz \
+                --output results/${{sample}}/krakenuniq/output.txt \
+                --report-file results/${{sample}}/krakenuniq/kraken-report.txt \
+                --gzip-compressed --only-classified-out
+        done
+        """
+
+
+rule escore:
+    input:
+        report="results/{sample}/krakenuniq/kraken-report.txt",
+        config="config/config.yaml"
+    output:
+        genus="results/{sample}/Escore/genus/{sample}_genus.csv",
+        species="results/{sample}/Escore/species/{sample}_species.csv",
+        pathogen="results/{sample}/Escore/pathogen/{sample}_pathogen.csv"
+    conda:
+        "workflow/envs/escore.yaml"
+    params:
+        script="scripts/dExp_Escore.py"
+    shell:
+        """
+        mkdir -p results/{wildcards.sample}/Escore/genus
+        mkdir -p results/{wildcards.sample}/Escore/species
+        mkdir -p results/{wildcards.sample}/Escore/pathogen
+        python {params.script} {input.report} {output.genus} {output.species} {output.pathogen} {input.config}
+        """
+
+
+
+rule bwa_aln:
+    input:
+        sample = "results/{pcr}/host_cleaned/{pcr}_unaligned.fastq.gz",
+        ref = lambda wc: VIRUS_REFERENCES[wc.virus]
+    output:
+        sai = "results/{pcr}/sai/{pcr}_{virus}_aln.sai"
+    conda:
+        "workflow/envs/bwa.yaml"
+    threads: 4
+    shell:
+        """
+        mkdir -p results/{wildcards.pcr}/sai
+        bwa aln -l 1024 -n 0.01 -o 2 -t {threads} {input.ref} {input.sample} > {output.sai}
+        """
+
+rule bwa_samse:
+    input:
+        sai = "results/{pcr}/sai/{pcr}_{virus}_aln.sai",
+        sample = "results/{pcr}/host_cleaned/{pcr}_unaligned.fastq.gz",
+        ref = lambda wc: VIRUS_REFERENCES[wc.virus]
+    output:
+        bam = "results/{pcr}/bam/{pcr}_{virus}_F4.bam"
+    conda:
+        "workflow/envs/bwa.yaml"
+    params:
+        rg = lambda wc: READ_GROUPS[wc.pcr]
+    shell:
+        """
+        mkdir -p results/{wildcards.pcr}/bam
+        bwa samse -r "{params.rg}" {input.ref} {input.sai} {input.sample} \
+        | samtools view -F 4 -Sb - > {output.bam}
+        """
+
+rule bam_sort:
+    input:
+        "results/{pcr}/bam/{pcr}_{virus}_F4.bam"
+    output:
+        sorted = "results/{pcr}/bam/{pcr}_{virus}_F4_sorted.bam",
+        bai = "results/{pcr}/bam/{pcr}_{virus}_F4_sorted.bam.bai"
+    conda:
+        "workflow/envs/samtools.yaml"
+    shell:
+        """
+        samtools sort {input} -o {output.sorted}
+        samtools index {output.sorted}
+        """
+
+rule bam_q30:
+    input:
+        sorted_bam = "results/{pcr}/bam/{pcr}_{virus}_F4_sorted.bam"
+    output:
+        q30 = "results/{pcr}/q30/{pcr}_{virus}_F4_q30.bam"
+    conda:
+        "workflow/envs/samtools.yaml"
+    shell:
+        """
+        mkdir -p results/{wildcards.pcr}/q30
+        samtools view -q 30 {input.sorted_bam} -o {output.q30}
+        """
+
+rule bam_q30_sort:
+    input:
+        "results/{pcr}/q30/{pcr}_{virus}_F4_q30.bam"
+    output:
+        sorted = "results/{pcr}/q30/{pcr}_{virus}_F4_q30_sort.bam",
+        bai = "results/{pcr}/q30/{pcr}_{virus}_F4_q30_sort.bam.bai"
+    conda:
+        "workflow/envs/samtools.yaml"
+    shell:
+        """
+        samtools sort {input} -o {output.sorted}
+        samtools index {output.sorted}
+        """
+
+rule remove_duplicates:
+    input:
+        "results/{pcr}/q30/{pcr}_{virus}_F4_q30_sort.bam"
+    output:
+        bam = "results/{pcr}/final/{pcr}_{virus}_F4_q30_rmdup.bam",
+        bai = "results/{pcr}/final/{pcr}_{virus}_F4_q30_rmdup.bam.bai",
+        metrics = "results/{pcr}/final/{pcr}_{virus}_F4_q30_rmdup.metrics"
+    conda:
+        "workflow/envs/picard.yaml"
+    shell:
+        """
+        mkdir -p results/{wildcards.pcr}/final
+        java -jar /raid_md0/Software/picard.jar MarkDuplicates \
+            OPTICAL_DUPLICATE_PIXEL_DISTANCE=2500 \
+            VALIDATION_STRINGENCY=SILENT \
+            REMOVE_DUPLICATES=true \
+            I={input} O={output.bam} M={output.metrics}
+        samtools index {output.bam}
+        """
+
+rule merge_bams_per_sample:
+    input:
+        lambda wc: [f"results/{pcr}/final/{pcr}_{wc.virus}_F4_q30_rmdup.bam" for pcr in SAMPLES_DICT[wc.sample]]
+    output:
+        bam = "results/merged/{sample}/{sample}_{virus}_merged.bam",
+        bai = "results/merged/{sample}/{sample}_{virus}_merged.bam.bai"
+    conda:
+        "workflow/envs/picard.yaml"
+    params:
+        bam_inputs=lambda wc: " ".join([f"I=results/{pcr}/final/{pcr}_{wc.virus}_F4_q30_rmdup.bam" for pcr in SAMPLES_DICT[wc.sample]])
+    shell:
+        """
+        mkdir -p results/merged/{wildcards.sample}
+        java -jar /raid_md0/Software/picard.jar MergeSamFiles \
+            {params.bam_inputs} \
+            O={output.bam} \
+            USE_THREADING=true \
+            VALIDATION_STRINGENCY=SILENT
+        samtools index {output.bam}
+        """
+
+
+rule count_raw_reads:
+    input:
+        r1 = lambda wc: PCRS_DICT[wc.pcr]["r1"]
+    output:
+        txt = "results/{pcr}/raw_counts/{pcr}_raw_read_count.txt"
+    threads: 1
+    shell:
+        """
+        mkdir -p results/{wildcards.pcr}/raw_counts
+        zcat {input.r1} | echo $((`wc -l` / 4)) > {output.txt}
+        """
+rule count_collapsed_reads:
+    input:
+        "results/{pcr}/adapter_removal/{pcr}.collapsed.gz"
+    output:
+        "results/{pcr}/counts/{pcr}_collapsed_read_count.txt"
+    shell:
+        """
+        mkdir -p results/{wildcards.pcr}/counts
+        zcat {input} | echo $((`wc -l` / 4)) > {output}
+        """
+
+rule count_unaligned_reads:
+    input:
+        "results/{pcr}/host_cleaned/{pcr}_unaligned.fastq.gz"
+    output:
+        "results/{pcr}/counts/{pcr}_unaligned_read_count.txt"
+    shell:
+        """
+        mkdir -p results/{wildcards.pcr}/counts
+        zcat {input} | echo $((`wc -l` / 4)) > {output}
+        """
+
+rule count_virus_reads:
+    input:
+        f4 = "results/{pcr}/bam/{pcr}_{virus}_F4.bam",
+        q30 = "results/{pcr}/q30/{pcr}_{virus}_F4_q30.bam",
+        rmdup = "results/{pcr}/final/{pcr}_{virus}_F4_q30_rmdup.bam"
+    output:
+        f4 = "results/{pcr}/counts/{pcr}_{virus}_F4_count.txt",
+        q30 = "results/{pcr}/counts/{pcr}_{virus}_q30_count.txt",
+        rmdup = "results/{pcr}/counts/{pcr}_{virus}_rmdup_count.txt"
+    shell:
+        """
+        mkdir -p results/{wildcards.pcr}/counts
+        samtools view -c {input.f4} > {output.f4}
+        samtools view -c {input.q30} > {output.q30}
+        samtools view -c {input.rmdup} > {output.rmdup}
+        """
+
+rule aggregate_sample_virus_metrics:
+    input:
+        raw = lambda wc: [f"results/{pcr}/raw_counts/{pcr}_raw_read_count.txt" for pcr in SAMPLES_DICT[wc.sample]],
+        collapsed = lambda wc: [f"results/{pcr}/counts/{pcr}_collapsed_read_count.txt" for pcr in SAMPLES_DICT[wc.sample]],
+        unaligned = lambda wc: [f"results/{pcr}/counts/{pcr}_unaligned_read_count.txt" for pcr in SAMPLES_DICT[wc.sample]],
+        f4 = lambda wc: [f"results/{pcr}/counts/{pcr}_{wc.virus}_F4_count.txt" for pcr in SAMPLES_DICT[wc.sample]],
+        q30 = lambda wc: [f"results/{pcr}/counts/{pcr}_{wc.virus}_q30_count.txt" for pcr in SAMPLES_DICT[wc.sample]],
+        rmdup = lambda wc: [f"results/{pcr}/counts/{pcr}_{wc.virus}_rmdup_count.txt" for pcr in SAMPLES_DICT[wc.sample]],
+        ani = lambda wc: [f"results/{pcr}/metrics/{pcr}_{wc.virus}_ani.txt" for pcr in SAMPLES_DICT[wc.sample]]
+    output:
+        "results/{sample}/reporting/{sample}_{virus}_metrics.csv"
+    run:
+        def read_counts(paths):
+            return sum(int(open(p).read().strip()) for p in paths)
+        
+        def parse_ani_file(path):
+            ani = 0.0
+            edit_dist = 0.0
+            try:
+                with open(path) as f:
+                    for line in f:
+                        if line.startswith("ANI:"):
+                            ani = float(line.strip().split()[1].replace('%',''))
+                        elif line.startswith("Mean edit distance per aligned read:"):
+                            edit_dist = float(line.strip().split()[-1])
+            except FileNotFoundError:
+                pass
+            return ani, edit_dist
+        
+        raw = read_counts(input.raw)
+        collapsed = read_counts(input.collapsed)
+        unaligned = read_counts(input.unaligned)
+        f4 = read_counts(input.f4)
+        q30 = read_counts(input.q30)
+        rmdup = read_counts(input.rmdup)
+
+        # Aggregate ANI and edit distance across all PCRs for this sample/virus
+        ani_vals = []
+        edit_dist_vals = []
+        for ani_file in input.ani:
+            a, e = parse_ani_file(ani_file)
+            ani_vals.append(a)
+            edit_dist_vals.append(e)
+        
+        mean_ani = sum(ani_vals)/len(ani_vals) if ani_vals else 0.0
+        mean_edit_dist = sum(edit_dist_vals)/len(edit_dist_vals) if edit_dist_vals else 0.0
+
+        host_aligned = collapsed - unaligned
+        host_aligned_pct = (host_aligned / raw * 100) if raw else 0
+        dup_rate = (1 - rmdup / q30) * 100 if q30 else 0
+
+        with open(output[0], "w") as out:
+            out.write("sample,virus,raw_reads,collapsed_reads,unaligned_reads,host_aligned_reads,host_aligned_pct,f4_reads,q30_reads,rmdup_reads,duplication_rate,mean_ANI,mean_edit_distance\n")
+            out.write(f"{wildcards.sample},{wildcards.virus},{raw},{collapsed},{unaligned},{host_aligned},{host_aligned_pct:.2f},{f4},{q30},{rmdup},{dup_rate:.2f},{mean_ani:.4f},{mean_edit_dist:.4f}\n")
+
+
+rule aggregate_all_virus_metrics:
+    input:
+        virus_metrics = expand("results/{sample}/reporting/{sample}_{virus}_metrics.csv", sample="{sample}", virus=VIRUSES)
+    output:
+        "results/{sample}/reporting/{sample}_all_virus_metrics.csv"
+    run:
+        import pandas as pd
+
+        dfs = []
+        for f in input.virus_metrics:
+            dfs.append(pd.read_csv(f))
+        combined = pd.concat(dfs, ignore_index=True)
+        combined.to_csv(output[0], index=False)
+
+
+
+rule calculate_ani_editdist:
+    input:
+        bam="results/{pcr}/final/{pcr}_{virus}_q30_rmdup.bam",
+        ref=lambda wc: VIRUS_REFERENCES[wc.virus]
+    output:
+        ani="results/{pcr}/metrics/{pcr}_{virus}_ani.txt"
+    conda:
+        "workflow/envs/python.yaml"
+    shell:
+        """
+        mkdir -p results/{wildcards.pcr}/metrics
+        python scripts/bam_ani_editdist.py {input.bam} {input.ref} > {output.ani}
+        """

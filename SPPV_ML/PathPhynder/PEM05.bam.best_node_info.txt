@@ -1,0 +1,2 @@
+sample	best_node	position_in_branch	edgeLen	estimated_loc_at_branch
+PEM05.bam	36	0.666666666666667	0.000862116900000001	0.000574744600000001

@@ -1,0 +1,2 @@
+sample	best_node	position_in_branch	edgeLen	estimated_loc_at_branch
+TP01.bam	33	0	0.000377791499999995	0

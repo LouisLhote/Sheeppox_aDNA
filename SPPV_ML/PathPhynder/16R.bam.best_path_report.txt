@@ -1,0 +1,7 @@
+Edge	Node1	Node2	support	conflict	snp_count	hg
+1	28	29	0	0	0	NA
+3	29	30	35	0	111	NA
+5	30	31	155	0	458	NA
+6	31	32	4	0	21	NA
+7	32	33	15	0	44	NA
+8	33	3	4	3	20	NA

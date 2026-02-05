@@ -1,7 +1,7 @@
 ## Sheeppox_aDNA
 
-Repository containing the analysis pipelines and scripts used in the study on ancient DNA from sheeppox virus (Capripoxvirus).  
-Add your article link here: `(https://doi.org/xxx)`.
+Repository containing the analysis pipelines and scripts used in the study on ancient DNA from sheeppox virus.  
+`(https://doi.org/xxx)`.
 
 ---
 

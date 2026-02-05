@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python](https://img.shields.io/badge/Python-3.7+-blue.svg)](https://www.python.org/)
 [![Snakemake](https://img.shields.io/badge/Snakemake-≥7.0-green.svg)](https://snakemake.github.io/)
-[![DOI](https://img.shields.io/badge/DOI-10.xxx/xxx-blue)](https://doi.org/xxx)
+
 
 **Article**: [Link to article](https://doi.org/xxx)
 

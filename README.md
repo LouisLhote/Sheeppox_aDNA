@@ -71,55 +71,7 @@ Each directory is a self-contained module or pipeline focused on one part of the
 
 ---
 
-## Getting Started
 
-### Clone the repository
 
-```bash
-git clone https://github.com/<your-username>/Sheeppox_aDNA.git
-cd Sheeppox_aDNA
-```
-
-### Environment / dependencies
-
-Each subdirectory may have its own requirements (e.g. Snakemake, BEAST, MACSE, KrakenUniq, SPAdes, RagTag, R or Python packages).  
-Check the `README` or configuration files within each subfolder (e.g. `Snakefile`, `environment.yml`, `requirements.txt`, or comments in scripts) for details.
-
----
-
-## Usage
-
-- **Reproducing the screening pipeline**  
-  Go to `Screening/` and follow the instructions in its documentation (or the `Snakefile` comments).
-
-- **Running mitochondrial analyses**  
-  Go to `Mitochondrial/` and use the provided mapping and BAM-splitting scripts.
-
-- **Running BEAST analyses**  
-  Go to `BEAST/`, open the XML files in BEAST, and run with the provided alignments.
-
-(You can customise this section with exact command lines once your pipelines are fully documented.)
-
----
-
-## Citation
-
-If you use this repository or any of the pipelines in your work, please cite:
-
-- **Main sheeppox aDNA article**:  
-  Add full citation here once available.
-
-You should also cite the tools used (BEAST, MACSE, KrakenUniq, SPAdes, RagTag, etc.) according to their documentation.
-
----
-
-## License
-
-Specify your license here, for example:
-
-- **License**: MIT License  
-  See `LICENSE` for details.
-
-(Replace with the actual license you intend to use.)
 
 

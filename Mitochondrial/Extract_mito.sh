@@ -31,7 +31,7 @@ SPECIES["TP04"]="Sheep"
 SPECIES["YG01"]="Sheep Goat"
 SPECIES["YG15"]="Cattle"
 SPECIES["YG16"]="Cattle"
-SPECIES["BA27"]="Cattle Sheep"
+SPECIES["BA27"]="Sheep"
 
 # I/O directories
 BAMDIR="."

@@ -1,8 +1,6 @@
 # 🐑🦠 Sheeppox_aDNA
 
-> Repository containing the analysis pipelines and scripts used in the study on ancient DNA from sheeppox virus.
-
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+> Repository containing the analysis pipelines and scripts used in "add title"
 [![Python](https://img.shields.io/badge/Python-3.7+-blue.svg)](https://www.python.org/)
 [![Snakemake](https://img.shields.io/badge/Snakemake-≥7.0-green.svg)](https://snakemake.github.io/)
 
@@ -23,8 +21,6 @@ This repository gathers all code used for:
 - **Pairwise distance** calculations and recombination-aware analyses
 - **Inactivated genes** profiling
 - **Phylogenetic dating with BEAST**
-
-Each directory is a self-contained module or pipeline focused on one part of the analysis.
 
 ---
 

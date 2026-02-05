@@ -17,7 +17,7 @@ This repository gathers all code used for:
 
 - **Screening** of sequencing data for Capripoxvirus
 - **Mitochondrial** analyses and competitive mapping
-- **SPPV_ML** Phylogenetic analaysis of the aSPPV dataset with Pathphynder placement
+- **SPPV_ML** Phylogenetic analysis of the aSPPV dataset with Pathphynder placement
 - **Metagenomic assembly** and scaffolding
 - **Gene integrity** analyses across genomes
 - **Pairwise distance** calculations and recombination-aware analyses
